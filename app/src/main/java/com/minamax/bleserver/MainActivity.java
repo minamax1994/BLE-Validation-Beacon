@@ -166,12 +166,6 @@ public class MainActivity extends Activity {
 
             if (DeviceProfile.CHARACTERISTIC_SET_MESSAGE_UUID.equals(characteristic.getUuid())) {
                 final String incomingMessage = new String(value, Charset.forName("UTF-8"));
-                handler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        setStoredMessage(incomingMessage);
-                    }
-                });
 
                 gattServer.sendResponse(device,
                         requestId,
@@ -197,6 +191,13 @@ public class MainActivity extends Activity {
                     });
                 }
                 gattServer.cancelConnection(device);
+
+                handler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        setStoredMessage("");
+                    }
+                }, 3000);
             }
         }
     };
