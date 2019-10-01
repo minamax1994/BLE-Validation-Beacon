@@ -9,8 +9,7 @@ import java.util.UUID;
 public class DeviceProfile {
 
     public static UUID SERVICE_UUID = UUID.fromString("4DF91029-B356-463E-9F48-BAB077BF3EF5");
-    public static UUID CHARACTERISTIC_BROADCAST_MESSAGE_UUID = UUID.fromString("3B66D024-2336-4F22-A980-8095F4898DDF");
-    public static UUID CHARACTERISTIC_SET_MESSAGE_UUID = UUID.fromString("3B66D024-2336-4F22-A980-8095F4898C42");
+    public static UUID CHARACTERISTIC_VALIDATION_UUID = UUID.fromString("3B66D024-2336-4F22-A980-8095F4898C42");
 
     public static String getStateDescription(int state) {
         switch (state) {

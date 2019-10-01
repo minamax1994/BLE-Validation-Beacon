@@ -9,7 +9,6 @@ import android.bluetooth.BluetoothGattServer;
 import android.bluetooth.BluetoothGattServerCallback;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
-import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.AdvertiseCallback;
 import android.bluetooth.le.AdvertiseData;
 import android.bluetooth.le.AdvertiseSettings;
@@ -17,23 +16,18 @@ import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.MediaPlayer;
-import android.media.Ringtone;
-import android.media.RingtoneManager;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.ParcelUuid;
 import android.util.Log;
-import android.view.View;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.nio.charset.Charset;
-import java.util.ArrayList;
+
+import retrofit2.Call;
+import retrofit2.Callback;
+import retrofit2.Response;
 
 public class MainActivity extends Activity {
     private static final String TAG = "PeripheralActivity";
@@ -46,7 +40,7 @@ public class MainActivity extends Activity {
     private TextView messageTv;
 
     private MediaPlayer vmp, imp;
-    private String broadcastMessage = "NO MESSAGES YET";
+    private String validationResponseMessage = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -99,18 +93,12 @@ public class MainActivity extends Activity {
         BluetoothGattService service = new BluetoothGattService(DeviceProfile.SERVICE_UUID,
                 BluetoothGattService.SERVICE_TYPE_PRIMARY);
 
-        BluetoothGattCharacteristic broadcastMessageCharacteristic =
-                new BluetoothGattCharacteristic(DeviceProfile.CHARACTERISTIC_BROADCAST_MESSAGE_UUID,
-                        //Read-only characteristic, supports notifications
-                        BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_NOTIFY,
-                        BluetoothGattCharacteristic.PERMISSION_READ);
         BluetoothGattCharacteristic setMessageCharacteristic =
-                new BluetoothGattCharacteristic(DeviceProfile.CHARACTERISTIC_SET_MESSAGE_UUID,
+                new BluetoothGattCharacteristic(DeviceProfile.CHARACTERISTIC_VALIDATION_UUID,
                         //Read+write permissions
-                        BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE,
+                        BluetoothGattCharacteristic.PROPERTY_READ | BluetoothGattCharacteristic.PROPERTY_WRITE | BluetoothGattCharacteristic.PROPERTY_NOTIFY,
                         BluetoothGattCharacteristic.PERMISSION_READ | BluetoothGattCharacteristic.PERMISSION_WRITE);
 
-        service.addCharacteristic(broadcastMessageCharacteristic);
         service.addCharacteristic(setMessageCharacteristic);
 
         gattServer.addService(service);
@@ -138,12 +126,12 @@ public class MainActivity extends Activity {
             super.onCharacteristicReadRequest(device, requestId, offset, characteristic);
             Log.i(TAG, "onCharacteristicReadRequest " + characteristic.getUuid().toString());
 
-            if (DeviceProfile.CHARACTERISTIC_BROADCAST_MESSAGE_UUID.equals(characteristic.getUuid())) {
+            if (DeviceProfile.CHARACTERISTIC_VALIDATION_UUID.equals(characteristic.getUuid())) {
                 gattServer.sendResponse(device,
                         requestId,
                         BluetoothGatt.GATT_SUCCESS,
                         0,
-                        getStoredBroadcast());
+                        getValidationResponseMessage());
             }
 
             gattServer.sendResponse(device,
@@ -154,7 +142,7 @@ public class MainActivity extends Activity {
         }
 
         @Override
-        public void onCharacteristicWriteRequest(BluetoothDevice device,
+        public void onCharacteristicWriteRequest(final BluetoothDevice device,
                                                  int requestId,
                                                  BluetoothGattCharacteristic characteristic,
                                                  boolean preparedWrite,
@@ -164,7 +152,7 @@ public class MainActivity extends Activity {
             super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value);
             Log.i(TAG, "onCharacteristicWriteRequest " + characteristic.getUuid().toString());
 
-            if (DeviceProfile.CHARACTERISTIC_SET_MESSAGE_UUID.equals(characteristic.getUuid())) {
+            if (DeviceProfile.CHARACTERISTIC_VALIDATION_UUID.equals(characteristic.getUuid())) {
                 final String incomingMessage = new String(value, Charset.forName("UTF-8"));
 
                 gattServer.sendResponse(device,
@@ -173,31 +161,100 @@ public class MainActivity extends Activity {
                         0,
                         value);
 
-                if (!incomingMessage.contains("f")) {
-                    vmp.start();
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            setStoredMessage("VALID");
-                        }
-                    });
-                } else {
+                if (incomingMessage.equals("-1")) {
                     imp.start();
                     handler.post(new Runnable() {
                         @Override
                         public void run() {
-                            setStoredMessage("INVALID");
+                            setValidationResponseMessage("INVALID");
+                            notifyDevice(device);
                         }
                     });
-                }
-                gattServer.cancelConnection(device);
+                    gattServer.cancelConnection(device);
+                    handler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            setValidationResponseMessage("");
+                        }
+                    }, 3000);
+                } else {
+                    ValidationService validationService = RetrofitInstance.getRetrofitInstance().create(ValidationService.class);
+                    Call<Integer> call = validationService.validate(incomingMessage);
+                    call.enqueue(new Callback<Integer>() {
+                        @Override
+                        public void onResponse(Call<Integer> call, Response<Integer> response) {
+                            if (response.body() == 0) {
+                                imp.start();
+                                handler.post(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        setValidationResponseMessage("INVALID");
+                                        notifyDevice(device);
+                                    }
+                                });
+                            } else {
+                                vmp.start();
+                                handler.post(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        setValidationResponseMessage("VALID");
+                                        notifyDevice(device);
+                                    }
+                                });
+                            }
+                            gattServer.cancelConnection(device);
+                            handler.postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    setValidationResponseMessage("");
+                                }
+                            }, 3000);
+                        }
 
-                handler.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        setStoredMessage("");
-                    }
-                }, 3000);
+                        @Override
+                        public void onFailure(Call<Integer> call, Throwable t) {
+                            imp.start();
+                            handler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    setValidationResponseMessage("SERVER ERROR");
+                                    notifyDevice(device);
+                                }
+                            });
+                            handler.postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    setValidationResponseMessage("");
+                                }
+                            }, 3000);
+                        }
+                    });
+
+//                if (!incomingMessage.contains("f")) {
+//                    vmp.start();
+//                    handler.post(new Runnable() {
+//                        @Override
+//                        public void run() {
+//                            setValidationResponseMessage("VALID");
+//                        }
+//                    });
+//                } else {
+//                    imp.start();
+//                    handler.post(new Runnable() {
+//                        @Override
+//                        public void run() {
+//                            setValidationResponseMessage("INVALID");
+//                        }
+//                    });
+//                }
+//                gattServer.cancelConnection(device);
+//                handler.postDelayed(new Runnable() {
+//                    @Override
+//                    public void run() {
+//                        setValidationResponseMessage("");
+//                    }
+//                }, 3000);
+                }
             }
         }
     };
@@ -229,41 +286,34 @@ public class MainActivity extends Activity {
         @Override
         public void onStartSuccess(AdvertiseSettings settingsInEffect) {
             Log.i(TAG, "Peripheral Advertise Started.");
-            postStatusMessage("GATT Server Ready");
         }
 
         @Override
         public void onStartFailure(int errorCode) {
             Log.w(TAG, "Peripheral Advertise Failed: " + errorCode);
-            postStatusMessage("GATT Server Error " + errorCode);
         }
     };
 
     private Handler handler = new Handler();
 
-    private void postStatusMessage(final String message) {
-        handler.post(new Runnable() {
-            @Override
-            public void run() {
-                setTitle(message);
-            }
-        });
+    private void notifyDevice(BluetoothDevice device) {
+        BluetoothGattCharacteristic validationCharacteristic = gattServer.getService(DeviceProfile.SERVICE_UUID)
+                .getCharacteristic(DeviceProfile.CHARACTERISTIC_VALIDATION_UUID);
+        validationCharacteristic.setValue(getValidationResponseMessage());
+        gattServer.notifyCharacteristicChanged(device, validationCharacteristic, false);
     }
 
-    private byte[] getStoredBroadcast() {
-        return broadcastMessage.getBytes(Charset.forName("UTF-8"));
+    private byte[] getValidationResponseMessage() {
+        return validationResponseMessage.getBytes(Charset.forName("UTF-8"));
     }
 
-    private byte[] getStoredMessage() {
-        return messageTv.getText().toString().getBytes(Charset.forName("UTF-8"));
-    }
-
-    private void setStoredMessage(String newBroadcastMessage) {
-        if (newBroadcastMessage.equals("VALID")) {
-            messageTv.setText(newBroadcastMessage);
+    private void setValidationResponseMessage(String responseMessage) {
+        validationResponseMessage = responseMessage;
+        if (responseMessage.equals("VALID")) {
+            messageTv.setText(responseMessage);
             messageTv.setTextColor(getResources().getColor(R.color.valid));
         } else {
-            messageTv.setText(newBroadcastMessage);
+            messageTv.setText(responseMessage);
             messageTv.setTextColor(getResources().getColor(R.color.invalid));
         }
     }
